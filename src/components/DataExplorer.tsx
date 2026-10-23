@@ -1,5 +1,5 @@
-import React, { useState, useMemo } from 'react';
-import { Search, Download, Trash2, Eye, ArrowUpDown, ChevronRight, FileSpreadsheet, X } from 'lucide-react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { Search, Download, Trash2, Eye, ArrowUpDown, ChevronRight, FileSpreadsheet, X, Sliders } from 'lucide-react';
 import { SheetRecord } from '../types';
 
 interface DataExplorerProps {
@@ -28,9 +28,11 @@ export const DataExplorer: React.FC<DataExplorerProps> = ({
   const [inspectRecord, setInspectRecord] = useState<SheetRecord | null>(null);
   const [sortField, setSortField] = useState<string>('ingestedAt');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [selectedCols, setSelectedCols] = useState<string[]>([]);
+  const [showColPicker, setShowColPicker] = useState<boolean>(false);
 
-  // Compute dynamic columns from all records
-  const dynamicColumns = useMemo(() => {
+  // Compute all available dynamic columns from all records (no slice limit)
+  const allColumns = useMemo(() => {
     const colSet = new Set<string>();
     // First prioritize common business columns
     const priority = ['codigo', 'id', 'cliente', 'nombre', 'categoria', 'monto', 'total', 'moneda', 'estado', 'status', 'pais', 'vendedor', 'fecha'];
@@ -40,17 +42,28 @@ export const DataExplorer: React.FC<DataExplorerProps> = ({
       }
     });
 
-    // Add remaining columns
-    records.slice(0, 50).forEach(r => {
+    // Add all remaining columns
+    records.forEach(r => {
       Object.keys(r.data).forEach(k => {
-        if (!colSet.has(k)) {
+        if (!colSet.has(k) && k !== '_source_tab') {
           colSet.add(k);
         }
       });
     });
 
-    return Array.from(colSet).slice(0, 8); // max 8 visible table columns
+    return Array.from(colSet);
   }, [records]);
+
+  // Default selected columns to all columns
+  useEffect(() => {
+    if (selectedCols.length === 0 && allColumns.length > 0) {
+      setSelectedCols(allColumns);
+    }
+  }, [allColumns, selectedCols.length]);
+
+  const activeColumns = useMemo(() => {
+    return selectedCols.length > 0 ? selectedCols : allColumns;
+  }, [selectedCols, allColumns]);
 
   // Sort and filter records
   const filteredRecords = useMemo(() => {
@@ -87,9 +100,18 @@ export const DataExplorer: React.FC<DataExplorerProps> = ({
     }
   };
 
+  const handleToggleCol = (col: string) => {
+    if (selectedCols.includes(col)) {
+      setSelectedCols(selectedCols.filter(c => c !== col));
+    } else {
+      setSelectedCols([...selectedCols, col]);
+    }
+  };
+
   const handleExportCsv = () => {
     if (records.length === 0) return;
-    const allHeaders = ['id', 'sourceSheet', 'spreadsheetTitle', 'ingestedAt', ...dynamicColumns];
+    const colsToExport = activeColumns;
+    const allHeaders = ['id', 'sourceSheet', 'spreadsheetTitle', 'ingestedAt', ...colsToExport];
     const csvRows = [
       allHeaders.join(','),
       ...filteredRecords.map(r => {
@@ -113,6 +135,7 @@ export const DataExplorer: React.FC<DataExplorerProps> = ({
     link.click();
     document.body.removeChild(link);
   };
+
 
   return (
     <div className="bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden">
@@ -144,6 +167,18 @@ export const DataExplorer: React.FC<DataExplorerProps> = ({
           </div>
 
           <button
+            onClick={() => setShowColPicker(!showColPicker)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border rounded-lg transition-colors ${
+              showColPicker
+                ? 'bg-slate-900 text-white border-slate-900'
+                : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+            }`}
+          >
+            <Sliders className="w-3.5 h-3.5" />
+            <span>Columnas ({selectedCols.length}/{allColumns.length})</span>
+          </button>
+
+          <button
             onClick={handleExportCsv}
             disabled={filteredRecords.length === 0}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-lg transition-colors disabled:opacity-40"
@@ -162,6 +197,49 @@ export const DataExplorer: React.FC<DataExplorerProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Column picker dropdown panel */}
+      {showColPicker && (
+        <div className="p-4 bg-slate-50 border-b border-slate-200 space-y-2">
+          <div className="flex items-center justify-between text-xs">
+            <span className="font-semibold text-slate-800">
+              Selecciona las columnas que deseas mostrar y exportar a CSV:
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setSelectedCols([...allColumns])}
+                className="text-xs text-slate-600 hover:text-slate-900 underline"
+              >
+                Todas
+              </button>
+              <button
+                onClick={() => setSelectedCols([])}
+                className="text-xs text-slate-600 hover:text-slate-900 underline"
+              >
+                Ninguna
+              </button>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-1.5 pt-1">
+            {allColumns.map(col => {
+              const isSelected = selectedCols.includes(col);
+              return (
+                <button
+                  key={col}
+                  onClick={() => handleToggleCol(col)}
+                  className={`px-2 py-1 rounded text-xs font-mono transition-colors border ${
+                    isSelected
+                      ? 'bg-slate-900 text-white border-slate-900 font-semibold'
+                      : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
+                  }`}
+                >
+                  {col}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Sheet tab segmented filter bar */}
       <div className="px-4 py-2.5 bg-slate-50/70 border-b border-slate-200 flex items-center gap-1.5 overflow-x-auto no-scrollbar">
@@ -196,14 +274,14 @@ export const DataExplorer: React.FC<DataExplorerProps> = ({
         })}
       </div>
 
-      {/* Table grid */}
-      <div className="overflow-x-auto">
-        <table className="w-full text-left border-collapse text-xs">
+      {/* Table grid with horizontal scroll container */}
+      <div className="table-scroll-container overflow-x-auto w-full">
+        <table className="w-full text-left border-collapse text-xs min-w-max">
           <thead>
             <tr className="border-b border-slate-200 bg-slate-50/50 text-slate-600 font-semibold uppercase tracking-wider text-[11px]">
-              <th className="py-2.5 px-4 w-12 text-center">#</th>
+              <th className="py-2.5 px-4 w-12 text-center sticky left-0 bg-slate-50 z-10 border-r border-slate-200 shadow-2xs">#</th>
               <th 
-                className="py-2.5 px-3 cursor-pointer hover:text-slate-900"
+                className="py-2.5 px-3 cursor-pointer hover:text-slate-900 sticky left-12 bg-slate-50 z-10 border-r border-slate-200 shadow-2xs"
                 onClick={() => toggleSort('ingestedAt')}
               >
                 <div className="flex items-center gap-1">
@@ -212,13 +290,13 @@ export const DataExplorer: React.FC<DataExplorerProps> = ({
                 </div>
               </th>
               <th className="py-2.5 px-3">Hoja Origen</th>
-              {dynamicColumns.map(col => {
+              {activeColumns.map(col => {
                 const isNumeric = records.some(r => typeof r.data[col] === 'number');
                 return (
                   <th
                     key={col}
                     onClick={() => toggleSort(col)}
-                    className={`py-2.5 px-3 cursor-pointer hover:text-slate-900 ${isNumeric ? 'text-right' : 'text-left'}`}
+                    className={`py-2.5 px-3 cursor-pointer hover:text-slate-900 font-mono ${isNumeric ? 'text-right' : 'text-left'}`}
                   >
                     <div className={`flex items-center gap-1 ${isNumeric ? 'justify-end' : 'justify-start'}`}>
                       <span>{col.replace(/_/g, ' ')}</span>
@@ -227,25 +305,25 @@ export const DataExplorer: React.FC<DataExplorerProps> = ({
                   </th>
                 );
               })}
-              <th className="py-2.5 px-3 text-right">Acciones</th>
+              <th className="py-2.5 px-3 text-right sticky right-0 bg-slate-50 z-10 border-l border-slate-200 shadow-2xs">Acciones</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {loading && records.length === 0 ? (
               Array.from({ length: 5 }).map((_, idx) => (
                 <tr key={idx} className="h-10 animate-pulse bg-slate-50/30">
-                  <td colSpan={dynamicColumns.length + 4} className="py-3 px-4 text-slate-400 text-center">
+                  <td colSpan={activeColumns.length + 4} className="py-3 px-4 text-slate-400 text-center">
                     Cargando registros...
                   </td>
                 </tr>
               ))
             ) : filteredRecords.length === 0 ? (
               <tr>
-                <td colSpan={dynamicColumns.length + 4} className="py-12 text-center text-slate-500">
+                <td colSpan={activeColumns.length + 4} className="py-12 text-center text-slate-500">
                   <FileSpreadsheet className="w-8 h-8 text-slate-300 mx-auto mb-2" />
                   <p className="font-medium text-slate-700">No se encontraron registros</p>
                   <p className="text-xs text-slate-400 mt-1">
-                    Envía datos usando el Simulador de Google Sheets o la Extensión de Chrome.
+                    Envía datos usando Google Sheets, carga un archivo XLS/CSV o conecta tu CRM.
                   </p>
                 </td>
               </tr>
@@ -262,10 +340,10 @@ export const DataExplorer: React.FC<DataExplorerProps> = ({
                     key={record.id}
                     className="hover:bg-slate-50/70 transition-colors group"
                   >
-                    <td className="py-2 px-4 text-center font-mono tabular-nums text-slate-400">
+                    <td className="py-2 px-4 text-center font-mono tabular-nums text-slate-400 sticky left-0 bg-white hover:bg-slate-50 z-10 border-r border-slate-100 shadow-2xs">
                       {index + 1}
                     </td>
-                    <td className="py-2 px-3 whitespace-nowrap text-slate-500 font-mono tabular-nums">
+                    <td className="py-2 px-3 whitespace-nowrap text-slate-500 font-mono tabular-nums sticky left-12 bg-white hover:bg-slate-50 z-10 border-r border-slate-100 shadow-2xs">
                       {timeStr}
                     </td>
                     <td className="py-2 px-3 whitespace-nowrap font-medium text-slate-800">
@@ -274,7 +352,7 @@ export const DataExplorer: React.FC<DataExplorerProps> = ({
                         <span>{record.sourceSheet}</span>
                       </div>
                     </td>
-                    {dynamicColumns.map(col => {
+                    {activeColumns.map(col => {
                       const val = record.data[col];
                       const isNumeric = typeof val === 'number';
                       const isMoney = col.includes('monto') || col.includes('total') || col.includes('precio');
@@ -293,15 +371,15 @@ export const DataExplorer: React.FC<DataExplorerProps> = ({
                       return (
                         <td
                           key={col}
-                          className={`py-2 px-3 whitespace-nowrap ${
-                            isNumeric ? 'text-right font-mono tabular-nums font-medium text-slate-900' : 'text-slate-700'
+                          className={`py-2 px-3 whitespace-nowrap font-mono ${
+                            isNumeric ? 'text-right tabular-nums font-medium text-slate-900' : 'text-slate-700'
                           }`}
                         >
                           {displayVal}
                         </td>
                       );
                     })}
-                    <td className="py-2 px-3 text-right whitespace-nowrap">
+                    <td className="py-2 px-3 text-right whitespace-nowrap sticky right-0 bg-white hover:bg-slate-50 z-10 border-l border-slate-100 shadow-2xs">
                       <div className="flex items-center justify-end gap-1 opacity-80 group-hover:opacity-100">
                         <button
                           onClick={() => setInspectRecord(record)}

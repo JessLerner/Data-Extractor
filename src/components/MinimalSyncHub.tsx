@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   FileSpreadsheet,
   Globe,
@@ -10,15 +10,17 @@ import {
   Download,
   Trash2,
   Search,
-  Layers,
   Check,
-  Radio,
+  Chrome,
+  UploadCloud,
+  FileText,
+  CheckSquare,
+  Square,
   Sliders,
-  ExternalLink,
-  ShieldCheck,
-  Lock,
-  ChevronDown,
-  Chrome
+  ChevronLeft,
+  ChevronRight,
+  Sparkles,
+  Info
 } from 'lucide-react';
 import {
   initAuth,
@@ -40,6 +42,7 @@ import {
 } from '../services/supabaseClient';
 import { apiClient } from '../services/api';
 import { SheetRecord } from '../types';
+import { parseSpreadsheetFile, filterColumns, ParsedFileResult } from '../services/fileParser';
 
 interface MinimalSyncHubProps {
   apiKey: string;
@@ -56,8 +59,8 @@ export const MinimalSyncHub: React.FC<MinimalSyncHubProps> = ({
   onGoogleStatusChange,
   onSupabaseStatusChange
 }) => {
-  // Source Selection: 'sheets' or 'web'
-  const [sourceType, setSourceType] = useState<'sheets' | 'web'>('sheets');
+  // Source Selection: 'sheets' | 'file' | 'web'
+  const [sourceType, setSourceType] = useState<'sheets' | 'file' | 'web'>('sheets');
 
   // Google Sheets Auth & Tabs State
   const [googleUser, setGoogleUser] = useState<User | null>(null);
@@ -67,11 +70,26 @@ export const MinimalSyncHub: React.FC<MinimalSyncHubProps> = ({
   const [availableTabs, setAvailableTabs] = useState<SheetTabSummary[]>([]);
   const [selectedTabNames, setSelectedTabNames] = useState<string[]>([]);
   const [loadingTabs, setLoadingTabs] = useState<boolean>(false);
+  const [sheetsDetectedData, setSheetsDetectedData] = useState<ExtractedSheetData | null>(null);
+
+  // External File Upload (XLS / XLSX / CSV / VSC) State
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [parsedFileData, setParsedFileData] = useState<ParsedFileResult | null>(null);
+  const [isParsingFile, setIsParsingFile] = useState<boolean>(false);
+  const [isDraggingFile, setIsDraggingFile] = useState<boolean>(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Web/CRM URL Source State
   const [webUrl, setWebUrl] = useState<string>('');
   const [webMonthFilter, setWebMonthFilter] = useState<'current' | 'all'>('current');
   const [webTeamFilter, setWebTeamFilter] = useState<string>('all');
+
+  // Column Selection for Export / Sync
+  // All detected columns in the current active source
+  const [detectedColumns, setDetectedColumns] = useState<string[]>([]);
+  // User-selected columns to be exported/synced
+  const [selectedColumns, setSelectedColumns] = useState<string[]>([]);
+  const [columnSearch, setColumnSearch] = useState<string>('');
 
   // Supabase Config State
   const [supabaseConfig, setSupabaseConfig] = useState<SupabaseConfig>(loadSupabaseConfig());
@@ -90,11 +108,14 @@ export const MinimalSyncHub: React.FC<MinimalSyncHubProps> = ({
   const [searchFilter, setSearchFilter] = useState<string>('');
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
 
-  // Execution states
+  // Execution states & notifications
   const [isExtracting, setIsExtracting] = useState<boolean>(false);
   const [actionStatus, setActionStatus] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
   const [showSqlModal, setShowSqlModal] = useState<boolean>(false);
   const [copiedSql, setCopiedSql] = useState<boolean>(false);
+
+  // Ref for table scroll container to allow quick scrolling
+  const tableScrollRef = useRef<HTMLDivElement>(null);
 
   // Init Google Auth
   useEffect(() => {
@@ -149,6 +170,7 @@ export const MinimalSyncHub: React.FC<MinimalSyncHubProps> = ({
     }
   }, []);
 
+  // Handle Google Login
   const handleGoogleLogin = async () => {
     setIsLoggingInGoogle(true);
     setActionStatus(null);
@@ -205,7 +227,7 @@ export const MinimalSyncHub: React.FC<MinimalSyncHubProps> = ({
     }
 
     setLoadingTabs(true);
-    setActionStatus({ type: 'info', text: 'Obteniendo pestañas de Google Sheets...' });
+    setActionStatus({ type: 'info', text: 'Obteniendo pestañas y columnas de Google Sheets...' });
 
     try {
       const meta = await fetchSpreadsheetTabs(cleanId, googleToken);
@@ -215,10 +237,31 @@ export const MinimalSyncHub: React.FC<MinimalSyncHubProps> = ({
       if (meta.tabs.length > 0) {
         const lastTab = meta.tabs[meta.tabs.length - 1];
         setSelectedTabNames([lastTab.title]);
-        setActionStatus({
-          type: 'success',
-          text: `Planilla "${meta.title}" cargada. Última pestaña seleccionada por defecto: "${lastTab.title}".`
-        });
+
+        // Pre-fetch content of the last tab to discover its columns immediately!
+        try {
+          const content = await fetchSpreadsheetContent(cleanId, googleToken, [lastTab.title]);
+          setSheetsDetectedData(content);
+          if (content.headers.length > 0) {
+            const cols = content.headers.filter(h => h !== '_source_tab');
+            setDetectedColumns(cols);
+            setSelectedColumns(cols); // select all by default
+            setActionStatus({
+              type: 'success',
+              text: `Planilla "${meta.title}" cargada. Última pestaña seleccionada: "${lastTab.title}" con ${cols.length} columnas detectadas.`
+            });
+          } else {
+            setActionStatus({
+              type: 'success',
+              text: `Planilla "${meta.title}" cargada. Pestaña: "${lastTab.title}".`
+            });
+          }
+        } catch {
+          setActionStatus({
+            type: 'success',
+            text: `Planilla "${meta.title}" cargada. Última pestaña seleccionada por defecto: "${lastTab.title}".`
+          });
+        }
       } else {
         setActionStatus({ type: 'info', text: `Planilla "${meta.title}" cargada sin pestañas visibles.` });
       }
@@ -229,6 +272,101 @@ export const MinimalSyncHub: React.FC<MinimalSyncHubProps> = ({
       setLoadingTabs(false);
     }
   };
+
+  // Switch tab in Google Sheets and re-detect columns
+  const handleSelectGoogleTab = async (tabTitle: string) => {
+    setSelectedTabNames([tabTitle]);
+    const cleanId = parseSpreadsheetId(sheetUrl);
+    if (cleanId && googleToken) {
+      try {
+        setActionStatus({ type: 'info', text: `Cargando columnas de pestaña "${tabTitle}"...` });
+        const content = await fetchSpreadsheetContent(cleanId, googleToken, [tabTitle]);
+        setSheetsDetectedData(content);
+        if (content.headers.length > 0) {
+          const cols = content.headers.filter(h => h !== '_source_tab');
+          setDetectedColumns(cols);
+          setSelectedColumns(cols);
+          setActionStatus({
+            type: 'success',
+            text: `Pestaña "${tabTitle}" cargada (${cols.length} columnas detectadas, ${content.rows.length} filas).`
+          });
+        }
+      } catch (err: any) {
+        console.warn('Could not prefetch tab content', err);
+      }
+    }
+  };
+
+  // External File Upload Handler (XLS, XLSX, CSV, VSC)
+  const processUploadedFile = async (file: File, sheetNameOverride?: string) => {
+    setIsParsingFile(true);
+    setActionStatus(null);
+    try {
+      const result = await parseSpreadsheetFile(file, sheetNameOverride);
+      setUploadedFile(file);
+      setParsedFileData(result);
+      setDetectedColumns(result.columns);
+      setSelectedColumns(result.columns); // All selected by default
+
+      setActionStatus({
+        type: 'success',
+        text: `Archivo "${file.name}" cargado con éxito. Pestaña: "${result.activeSheet}" (${result.totalRows} filas, ${result.columns.length} columnas detectadas).`
+      });
+    } catch (err: any) {
+      console.error(err);
+      setActionStatus({
+        type: 'error',
+        text: `Error al procesar el archivo: ${err.message || 'Formato no soportado.'}`
+      });
+    } finally {
+      setIsParsingFile(false);
+    }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      processUploadedFile(file);
+    }
+  };
+
+  const handleFileDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setIsDraggingFile(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) {
+      processUploadedFile(file);
+    }
+  };
+
+  const handleSwitchFileSheet = async (sheetName: string) => {
+    if (uploadedFile) {
+      await processUploadedFile(uploadedFile, sheetName);
+    }
+  };
+
+  // Toggle Column Selection
+  const toggleColumnSelection = (col: string) => {
+    if (selectedColumns.includes(col)) {
+      setSelectedColumns(prev => prev.filter(c => c !== col));
+    } else {
+      setSelectedColumns(prev => [...prev, col]);
+    }
+  };
+
+  const selectAllColumns = () => {
+    setSelectedColumns([...detectedColumns]);
+  };
+
+  const deselectAllColumns = () => {
+    setSelectedColumns([]);
+  };
+
+  // Filtered columns in column search
+  const filteredDetectedColumns = useMemo(() => {
+    if (!columnSearch.trim()) return detectedColumns;
+    return detectedColumns.filter(c => c.toLowerCase().includes(columnSearch.toLowerCase().trim()));
+  }, [detectedColumns, columnSearch]);
 
   // Main Extraction & Supabase Sync Action
   const handleExtractAndSyncToSupabase = async () => {
@@ -242,6 +380,7 @@ export const MinimalSyncHub: React.FC<MinimalSyncHubProps> = ({
       let spreadsheetId = '';
 
       if (sourceType === 'sheets') {
+        // Source A: Google Sheets
         const cleanId = parseSpreadsheetId(sheetUrl);
         if (!cleanId) {
           throw new Error('Ingresa la URL o ID de Google Sheets.');
@@ -250,7 +389,6 @@ export const MinimalSyncHub: React.FC<MinimalSyncHubProps> = ({
           throw new Error('Inicia sesión con Google para acceder a las planillas.');
         }
 
-        // Extract selected tabs (or last tab if empty)
         const tabsToFetch = selectedTabNames.length > 0
           ? selectedTabNames
           : (availableTabs.length > 0 ? [availableTabs[availableTabs.length - 1].title] : undefined);
@@ -260,8 +398,18 @@ export const MinimalSyncHub: React.FC<MinimalSyncHubProps> = ({
         sourceName = data.sheetName;
         spreadsheetTitle = data.title;
         spreadsheetId = data.spreadsheetId;
+      } else if (sourceType === 'file') {
+        // Source B: External File (XLS / XLSX / CSV / VSC)
+        if (!parsedFileData || parsedFileData.rows.length === 0) {
+          throw new Error('Por favor carga un archivo XLS, XLSX o CSV con datos antes de sincronizar.');
+        }
+
+        extractedRows = parsedFileData.rows;
+        sourceName = `${parsedFileData.fileName} [${parsedFileData.activeSheet}]`;
+        spreadsheetTitle = parsedFileData.fileName;
+        spreadsheetId = `file_${Date.now()}`;
       } else {
-        // Web Page / CRM extraction
+        // Source C: Web Page / CRM
         if (!webUrl.trim()) {
           throw new Error('Ingresa la URL de la página web o CRM a extraer.');
         }
@@ -269,10 +417,9 @@ export const MinimalSyncHub: React.FC<MinimalSyncHubProps> = ({
         sourceName = 'Web_CRM_Direct';
         spreadsheetTitle = webUrl;
         
-        // Extract from target URL via proxy or scrape pattern
         extractedRows = [
           {
-            codigo: 'WEB-' + Date.now().toString().slice(-4),
+            codigo: 'CRM-' + Date.now().toString().slice(-4),
             fuente_url: webUrl,
             periodo: webMonthFilter === 'current' ? 'Mes Actual' : 'Todo',
             equipo: webTeamFilter !== 'all' ? webTeamFilter : 'General',
@@ -286,20 +433,32 @@ export const MinimalSyncHub: React.FC<MinimalSyncHubProps> = ({
         throw new Error('No se encontraron filas con datos en la fuente especificada.');
       }
 
+      // CRITICAL REQUIREMENT: Filter rows to ONLY include the user-selected columns!
+      // If user selected specific columns, apply filter; if none selected, warn user
+      if (detectedColumns.length > 0 && selectedColumns.length === 0) {
+        throw new Error('Debes seleccionar al menos una columna para exportar.');
+      }
+
+      const activeColumnsToExport = selectedColumns.length > 0
+        ? selectedColumns
+        : (detectedColumns.length > 0 ? detectedColumns : Object.keys(extractedRows[0] || {}));
+
+      const filteredRows = filterColumns(extractedRows, activeColumnsToExport);
+
       // 1. Send to Local Database / API
       await apiClient.ingestData({
         sheetName: sourceName,
         spreadsheetTitle,
         spreadsheetId,
         action: 'batch_sync',
-        records: extractedRows,
+        records: filteredRows,
         apiKey
       });
 
       // 2. Direct Sync to Supabase if configured
       let supabaseMessage = '';
       if (supabaseConfig.projectUrl && supabaseConfig.apiKey) {
-        const supRes = await sendRowsToSupabase(extractedRows, supabaseConfig, {
+        const supRes = await sendRowsToSupabase(filteredRows, supabaseConfig, {
           sheetName: sourceName,
           spreadsheetTitle,
           spreadsheetId
@@ -317,7 +476,7 @@ export const MinimalSyncHub: React.FC<MinimalSyncHubProps> = ({
 
       setActionStatus({
         type: 'success',
-        text: `✅ ${extractedRows.length} filas extraídas con éxito${supabaseMessage}.`
+        text: `✅ ${filteredRows.length} filas extraídas con éxito (${activeColumnsToExport.length} columnas exportadas)${supabaseMessage}.`
       });
     } catch (err: any) {
       setActionStatus({
@@ -332,8 +491,7 @@ export const MinimalSyncHub: React.FC<MinimalSyncHubProps> = ({
   // Continuous sync interval (Mantener siempre sincronizado)
   useEffect(() => {
     let interval: any = null;
-    if (keepSynced && sheetUrl && googleToken && availableTabs.length > 0) {
-      // Periodic background refresh every 30 seconds
+    if (keepSynced && sourceType === 'sheets' && sheetUrl && googleToken && availableTabs.length > 0) {
       interval = setInterval(() => {
         handleExtractAndSyncToSupabase();
       }, 30000);
@@ -341,7 +499,7 @@ export const MinimalSyncHub: React.FC<MinimalSyncHubProps> = ({
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [keepSynced, sheetUrl, googleToken, availableTabs, selectedTabNames, supabaseConfig]);
+  }, [keepSynced, sourceType, sheetUrl, googleToken, availableTabs, selectedTabNames, selectedColumns, supabaseConfig]);
 
   // Filtered rows for the view
   const displayRecords = useMemo(() => {
@@ -350,21 +508,76 @@ export const MinimalSyncHub: React.FC<MinimalSyncHubProps> = ({
     return syncedRecords.filter(r => JSON.stringify(r.data).toLowerCase().includes(q));
   }, [syncedRecords, searchFilter]);
 
-  // Dynamic columns
-  const visibleColumns = useMemo(() => {
+  // Dynamic columns for the Synced Records table
+  // ALL detected columns from synced records (NO arbitrary slice(0, 6)!)
+  const allSyncedColumns = useMemo(() => {
     if (syncedRecords.length === 0) return [];
     const keys = new Set<string>();
-    syncedRecords.slice(0, 10).forEach(r => {
-      Object.keys(r.data).forEach(k => keys.add(k));
+    syncedRecords.forEach(r => {
+      Object.keys(r.data).forEach(k => {
+        if (k && k !== '_source_tab') keys.add(k);
+      });
     });
-    return Array.from(keys).slice(0, 6);
+    return Array.from(keys);
   }, [syncedRecords]);
+
+  // When synced records exist, populate detected columns if empty
+  useEffect(() => {
+    if (detectedColumns.length === 0 && allSyncedColumns.length > 0) {
+      setDetectedColumns(allSyncedColumns);
+      setSelectedColumns(allSyncedColumns);
+    }
+  }, [allSyncedColumns, detectedColumns.length]);
+
+  // Table horizontal scrolling helpers
+  const handleScrollTable = (direction: 'left' | 'right') => {
+    if (tableScrollRef.current) {
+      const scrollAmount = 350;
+      tableScrollRef.current.scrollBy({
+        left: direction === 'left' ? -scrollAmount : scrollAmount,
+        behavior: 'smooth'
+      });
+    }
+  };
+
+  // Export CSV of currently synced records respecting column selection
+  const handleExportCsv = () => {
+    if (displayRecords.length === 0) return;
+    const columnsToInclude = selectedColumns.length > 0 ? selectedColumns : allSyncedColumns;
+    const headers = ['#', 'Hoja / Origen', 'Hora Ingesta', ...columnsToInclude];
+
+    const csvRows = [
+      headers.join(','),
+      ...displayRecords.map((r, idx) => {
+        const rowValues = [
+          idx + 1,
+          `"${(r.sourceSheet || '').replace(/"/g, '""')}"`,
+          `"${new Date(r.ingestedAt).toLocaleString('es-ES')}"`,
+          ...columnsToInclude.map(col => {
+            const val = r.data[col] !== undefined ? String(r.data[col]) : '';
+            return `"${val.replace(/"/g, '""')}"`;
+          })
+        ];
+        return rowValues.join(',');
+      })
+    ];
+
+    const blob = new Blob([csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `sheetstream-export-${Date.now()}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <div className="space-y-6">
       {/* Action and feedback notifications */}
       {actionStatus && (
-        <div className={`p-3 rounded-lg text-xs flex items-center justify-between gap-2 ${
+        <div className={`p-3 rounded-lg text-xs flex items-center justify-between gap-2 shadow-xs transition-all ${
           actionStatus.type === 'success'
             ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
             : actionStatus.type === 'error'
@@ -379,9 +592,9 @@ export const MinimalSyncHub: React.FC<MinimalSyncHubProps> = ({
             ) : (
               <RefreshCw className="w-4 h-4 shrink-0 animate-spin text-slate-600" />
             )}
-            <span>{actionStatus.text}</span>
+            <span className="font-medium">{actionStatus.text}</span>
           </div>
-          <button onClick={() => setActionStatus(null)} className="text-xs opacity-60 hover:opacity-100">
+          <button onClick={() => setActionStatus(null)} className="text-xs opacity-60 hover:opacity-100 p-1">
             ✕
           </button>
         </div>
@@ -392,7 +605,7 @@ export const MinimalSyncHub: React.FC<MinimalSyncHubProps> = ({
         
         {/* Card 1: Fuente de Datos (Origen) */}
         <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs space-y-4">
-          <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+          <div className="flex items-center justify-between pb-3 border-b border-slate-100 flex-wrap gap-2">
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-slate-900"></span>
               <h2 className="text-sm font-bold text-slate-900 uppercase tracking-wider">
@@ -400,23 +613,32 @@ export const MinimalSyncHub: React.FC<MinimalSyncHubProps> = ({
               </h2>
             </div>
 
-            {/* Source Segmented Selector */}
+            {/* Source Segmented Selector: 3 clean options */}
             <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg text-xs font-semibold">
               <button
                 onClick={() => setSourceType('sheets')}
-                className={`px-3 py-1 rounded-md transition-colors ${
+                className={`px-2.5 py-1 rounded-md transition-colors ${
                   sourceType === 'sheets' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
                 Google Sheets
               </button>
               <button
+                onClick={() => setSourceType('file')}
+                className={`px-2.5 py-1 rounded-md transition-colors flex items-center gap-1 ${
+                  sourceType === 'file' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <UploadCloud className="w-3 h-3" />
+                <span>Archivo XLS / CSV</span>
+              </button>
+              <button
                 onClick={() => setSourceType('web')}
-                className={`px-3 py-1 rounded-md transition-colors ${
+                className={`px-2.5 py-1 rounded-md transition-colors ${
                   sourceType === 'web' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                Página Web / CRM
+                CRM / Web
               </button>
             </div>
           </div>
@@ -469,9 +691,10 @@ export const MinimalSyncHub: React.FC<MinimalSyncHubProps> = ({
                   <button
                     onClick={handleLoadTabs}
                     disabled={loadingTabs || !sheetUrl.trim()}
-                    className="px-3 py-2 bg-slate-900 text-white font-semibold rounded-lg text-xs hover:bg-slate-800 disabled:opacity-40 shrink-0"
+                    className="px-3 py-2 bg-slate-900 text-white font-semibold rounded-lg text-xs hover:bg-slate-800 disabled:opacity-40 shrink-0 flex items-center gap-1.5"
                   >
-                    {loadingTabs ? 'Cargando...' : 'Detectar Pestañas'}
+                    {loadingTabs ? <RefreshCw className="w-3 h-3 animate-spin" /> : <FileSpreadsheet className="w-3.5 h-3.5" />}
+                    <span>{loadingTabs ? 'Cargando...' : 'Detectar Columnas'}</span>
                   </button>
                 </div>
               </div>
@@ -495,7 +718,7 @@ export const MinimalSyncHub: React.FC<MinimalSyncHubProps> = ({
                       return (
                         <button
                           key={tab.sheetId}
-                          onClick={() => setSelectedTabNames([tab.title])}
+                          onClick={() => handleSelectGoogleTab(tab.title)}
                           className={`p-2 text-xs rounded border text-left transition-all flex items-center justify-between ${
                             isSelected
                               ? 'bg-white border-slate-900 font-bold text-slate-900 shadow-2xs ring-1 ring-slate-900'
@@ -517,9 +740,131 @@ export const MinimalSyncHub: React.FC<MinimalSyncHubProps> = ({
             </div>
           )}
 
-          {/* Option B: Web Page / CRM */}
+          {/* Option B: External File Upload (XLS / XLSX / CSV / VSC) */}
+          {sourceType === 'file' && (
+            <div className="space-y-4">
+              {/* File Dropzone */}
+              <div
+                onDragOver={(e) => { e.preventDefault(); setIsDraggingFile(true); }}
+                onDragLeave={() => setIsDraggingFile(false)}
+                onDrop={handleFileDrop}
+                onClick={() => fileInputRef.current?.click()}
+                className={`border-2 border-dashed rounded-xl p-5 text-center cursor-pointer transition-all ${
+                  isDraggingFile
+                    ? 'border-slate-900 bg-slate-50'
+                    : 'border-slate-200 hover:border-slate-400 bg-slate-50/50'
+                }`}
+              >
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".xlsx,.xls,.csv,.vsc,.tsv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
+                  onChange={handleFileChange}
+                  className="hidden"
+                />
+
+                <div className="w-10 h-10 rounded-full bg-slate-900 text-white mx-auto flex items-center justify-center mb-2 shadow-xs">
+                  {isParsingFile ? (
+                    <RefreshCw className="w-5 h-5 animate-spin" />
+                  ) : (
+                    <UploadCloud className="w-5 h-5" />
+                  )}
+                </div>
+
+                <div className="text-xs font-bold text-slate-900">
+                  {uploadedFile ? uploadedFile.name : 'Haz clic o arrastra tu archivo XLS, XLSX o CSV aquí'}
+                </div>
+                <div className="text-[11px] text-slate-500 mt-1">
+                  Formatos compatibles: Excel (.xlsx, .xls) y Archivos Delimitados (.csv, .vsc)
+                </div>
+
+                {uploadedFile && (
+                  <div className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[11px] font-semibold">
+                    <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                    <span>{(uploadedFile.size / 1024).toFixed(1)} KB · Listo para procesar</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Multi-sheet selector for Excel files (defaults to last sheet!) */}
+              {parsedFileData && parsedFileData.sheetNames.length > 1 && (
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-2">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-semibold text-slate-800">
+                      Pestaña del Archivo (Por defecto: Última Pestaña)
+                    </span>
+                    <span className="text-[11px] text-slate-500 font-mono">
+                      {parsedFileData.sheetNames.length} hojas
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    {parsedFileData.sheetNames.map((sheet, idx) => {
+                      const isLast = idx === parsedFileData.sheetNames.length - 1;
+                      const isSelected = parsedFileData.activeSheet === sheet;
+                      return (
+                        <button
+                          key={sheet}
+                          onClick={() => handleSwitchFileSheet(sheet)}
+                          className={`p-2 text-xs rounded border text-left transition-all flex items-center justify-between ${
+                            isSelected
+                              ? 'bg-white border-slate-900 font-bold text-slate-900 shadow-2xs ring-1 ring-slate-900'
+                              : 'bg-white/60 border-slate-200 text-slate-600 hover:border-slate-300'
+                          }`}
+                        >
+                          <span className="truncate">{sheet}</span>
+                          {isLast && (
+                            <span className="text-[10px] bg-slate-100 text-slate-600 px-1 py-0.2 rounded font-mono shrink-0 ml-1">
+                              Última
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* File Statistics summary */}
+              {parsedFileData && (
+                <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                  <div className="bg-slate-50 p-2 rounded-lg border border-slate-200">
+                    <span className="block text-slate-400 text-[10px] uppercase font-bold">Filas Leídas</span>
+                    <span className="font-mono font-bold text-slate-800 text-sm">{parsedFileData.totalRows}</span>
+                  </div>
+                  <div className="bg-slate-50 p-2 rounded-lg border border-slate-200">
+                    <span className="block text-slate-400 text-[10px] uppercase font-bold">Columnas</span>
+                    <span className="font-mono font-bold text-slate-800 text-sm">{parsedFileData.columns.length}</span>
+                  </div>
+                  <div className="bg-slate-50 p-2 rounded-lg border border-slate-200">
+                    <span className="block text-slate-400 text-[10px] uppercase font-bold">A Exportar</span>
+                    <span className="font-mono font-bold text-emerald-700 text-sm">{selectedColumns.length}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Option C: Web Page / CRM */}
           {sourceType === 'web' && (
             <div className="space-y-4">
+              {/* Notice regarding CRM non-excel format */}
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900 flex items-start gap-2">
+                <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <div>
+                  <div className="font-bold">¿Tu CRM no entrega datos en tabla directa?</div>
+                  <div className="text-[11px] text-amber-800 mt-0.5">
+                    Puedes exportar el reporte desde tu CRM en formato <strong>.XLS</strong> o <strong>.CSV</strong> y cargarlo directamente con la opción <strong>Archivo XLS / CSV</strong> de arriba.
+                  </div>
+                  <button
+                    onClick={() => setSourceType('file')}
+                    className="mt-1.5 text-xs font-semibold text-amber-950 underline hover:text-black flex items-center gap-1"
+                  >
+                    <span>Ir a Carga Externa de XLS / CSV →</span>
+                  </button>
+                </div>
+              </div>
+
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
                   URL de la Página Web o CRM (HubSpot, Salesforce, Zoho, etc.)
@@ -657,12 +1002,96 @@ export const MinimalSyncHub: React.FC<MinimalSyncHubProps> = ({
         </div>
       </div>
 
+      {/* CORE REQUIREMENT: Interactive Column Selection for Export */}
+      {detectedColumns.length > 0 && (
+        <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+            <div>
+              <div className="flex items-center gap-2">
+                <Sliders className="w-4 h-4 text-slate-900" />
+                <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">
+                  Selección de Columnas a Exportar
+                </h3>
+                <span className="px-2 py-0.5 rounded-full bg-slate-900 text-white font-mono text-xs font-bold">
+                  {selectedColumns.length} de {detectedColumns.length} seleccionadas
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Marca o desmarca las columnas que te interesan exportar. Solo las columnas seleccionadas se guardarán en Supabase y el archivo CSV.
+              </p>
+            </div>
+
+            {/* Action buttons & Search */}
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={columnSearch}
+                  onChange={(e) => setColumnSearch(e.target.value)}
+                  placeholder="Filtrar columna..."
+                  className="pl-8 pr-2.5 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-800 focus:bg-white focus:outline-none"
+                />
+              </div>
+
+              <button
+                onClick={selectAllColumns}
+                className="px-2.5 py-1 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition-colors"
+              >
+                Seleccionar todas
+              </button>
+
+              <button
+                onClick={deselectAllColumns}
+                className="px-2.5 py-1 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition-colors"
+              >
+                Deseleccionar todas
+              </button>
+            </div>
+          </div>
+
+          {/* Column Checkboxes Grid */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2 max-h-48 overflow-y-auto p-1">
+            {filteredDetectedColumns.map(col => {
+              const isSelected = selectedColumns.includes(col);
+              return (
+                <button
+                  key={col}
+                  type="button"
+                  onClick={() => toggleColumnSelection(col)}
+                  className={`flex items-center gap-2 p-2 rounded-lg text-left text-xs transition-all border ${
+                    isSelected
+                      ? 'bg-slate-900 text-white border-slate-900 font-semibold shadow-2xs'
+                      : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
+                  }`}
+                >
+                  <span className={`w-3.5 h-3.5 rounded flex items-center justify-center shrink-0 border ${
+                    isSelected ? 'bg-white text-slate-900 border-white' : 'border-slate-400 bg-white'
+                  }`}>
+                    {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
+                  </span>
+                  <span className="truncate font-mono" title={col}>
+                    {col}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          {filteredDetectedColumns.length === 0 && (
+            <div className="py-4 text-center text-xs text-slate-400">
+              No hay columnas que coincidan con "{columnSearch}"
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Main Single Action Button */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900 text-white p-5 rounded-xl shadow-sm">
         <div>
           <div className="text-sm font-bold flex items-center gap-2">
             <span>Extraer y Sincronizar en Supabase</span>
-            {keepSynced && (
+            {keepSynced && sourceType === 'sheets' && (
               <span className="text-[11px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded font-mono">
                 Auto-Sync Activo
               </span>
@@ -671,17 +1100,20 @@ export const MinimalSyncHub: React.FC<MinimalSyncHubProps> = ({
           <div className="text-xs text-slate-300 mt-0.5">
             {sourceType === 'sheets'
               ? `Fuente: Google Sheets (${selectedTabNames.join(', ') || 'Última Pestaña'}) → Supabase (${supabaseConfig.tableName || 'sheet_records'})`
+              : sourceType === 'file'
+              ? `Fuente: Archivo ${parsedFileData?.fileName || 'XLS/CSV'} (${parsedFileData?.totalRows || 0} filas) → Supabase`
               : `Fuente: Web / CRM → Supabase (${supabaseConfig.tableName || 'sheet_records'})`}
+            {selectedColumns.length > 0 && ` · [${selectedColumns.length} columnas a exportar]`}
           </div>
         </div>
 
         <button
           onClick={handleExtractAndSyncToSupabase}
-          disabled={isExtracting}
+          disabled={isExtracting || (sourceType === 'file' && !parsedFileData)}
           className="px-5 py-2.5 bg-white text-slate-900 font-bold rounded-lg hover:bg-slate-100 transition-colors shadow-sm text-xs flex items-center justify-center gap-2 whitespace-nowrap disabled:opacity-50"
         >
           <Send className="w-3.5 h-3.5" />
-          <span>{isExtracting ? 'Extrayendo datos...' : '⚡ Extraer y Sincronizar Ahora'}</span>
+          <span>{isExtracting ? 'Extrayendo y Sincronizando...' : '⚡ Extraer y Sincronizar Ahora'}</span>
         </button>
       </div>
 
@@ -698,10 +1130,11 @@ export const MinimalSyncHub: React.FC<MinimalSyncHubProps> = ({
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
               {lastSyncTime ? `Última sincronización: ${lastSyncTime}` : 'Sin sincronizaciones activas aún'}
+              {allSyncedColumns.length > 0 && ` · ${allSyncedColumns.length} columnas en total`}
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <div className="relative">
               <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
               <input
@@ -713,6 +1146,17 @@ export const MinimalSyncHub: React.FC<MinimalSyncHubProps> = ({
               />
             </div>
 
+            {/* Export CSV button with selected columns */}
+            <button
+              onClick={handleExportCsv}
+              disabled={displayRecords.length === 0}
+              className="px-3 py-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-semibold rounded-lg text-xs flex items-center gap-1.5 shadow-2xs disabled:opacity-40"
+              title="Exportar CSV con las columnas seleccionadas"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Exportar CSV</span>
+            </button>
+
             <button
               onClick={loadExistingRecords}
               className="p-1.5 border border-slate-200 rounded-lg hover:bg-slate-50 text-slate-600"
@@ -723,45 +1167,104 @@ export const MinimalSyncHub: React.FC<MinimalSyncHubProps> = ({
           </div>
         </div>
 
-        {/* Real Table */}
-        <div className="overflow-x-auto">
+        {/* Horizontal Scroll Navigation Bar with Quick Scroll buttons */}
+        {allSyncedColumns.length > 4 && (
+          <div className="px-4 py-2 bg-slate-50 border-b border-slate-200 flex items-center justify-between text-xs text-slate-500">
+            <div className="flex items-center gap-2">
+              <span className="font-semibold text-slate-700">↔ Barra de Desplazamiento Horizontal</span>
+              <span className="text-[11px] text-slate-400">
+                (Mostrando todas las {allSyncedColumns.length} columnas. Desplaza horizontalmente si no caben en pantalla)
+              </span>
+            </div>
+
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => handleScrollTable('left')}
+                className="p-1 rounded bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 shadow-2xs flex items-center gap-0.5 text-[11px] font-semibold"
+                title="Desplazar a la izquierda"
+              >
+                <ChevronLeft className="w-3.5 h-3.5" />
+                <span>Izq.</span>
+              </button>
+              <button
+                onClick={() => handleScrollTable('right')}
+                className="p-1 rounded bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 shadow-2xs flex items-center gap-0.5 text-[11px] font-semibold"
+                title="Desplazar a la derecha"
+              >
+                <span>Der.</span>
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Real Table with Enhanced Horizontal Scrollbar */}
+        <div
+          ref={tableScrollRef}
+          className="table-scroll-container overflow-x-auto w-full"
+        >
           {displayRecords.length === 0 ? (
             <div className="py-12 text-center text-slate-500 text-xs">
               <Database className="w-7 h-7 text-slate-300 mx-auto mb-2" />
               <p className="font-semibold text-slate-700">Aún no hay datos sincronizados</p>
               <p className="text-slate-400 mt-1 max-w-sm mx-auto">
-                Conecta tu Google Sheet o página web arriba y haz clic en "Extraer y Sincronizar" para ver tus datos en tiempo real.
+                Conecta tu Google Sheet, sube un archivo XLS/CSV o conecta tu CRM arriba y haz clic en "Extraer y Sincronizar Ahora".
               </p>
             </div>
           ) : (
-            <table className="w-full text-left border-collapse text-xs">
+            <table className="w-full text-left border-collapse text-xs min-w-max">
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold uppercase text-[11px]">
-                  <th className="py-2.5 px-3 w-10 text-center font-mono">#</th>
-                  <th className="py-2.5 px-3">Hoja / Origen</th>
-                  {visibleColumns.map(col => (
-                    <th key={col} className="py-2.5 px-3 whitespace-nowrap">
-                      {col}
-                    </th>
-                  ))}
-                  <th className="py-2.5 px-3 text-right">Hora</th>
+                  <th className="py-2.5 px-3 w-12 text-center font-mono sticky left-0 bg-slate-50 z-10 border-r border-slate-200 shadow-2xs">
+                    #
+                  </th>
+                  <th className="py-2.5 px-3 sticky left-12 bg-slate-50 z-10 border-r border-slate-200 shadow-2xs whitespace-nowrap min-w-[140px]">
+                    Hoja / Origen
+                  </th>
+                  {/* Render ALL columns without cutting off! */}
+                  {allSyncedColumns.map(col => {
+                    const isSelected = selectedColumns.length === 0 || selectedColumns.includes(col);
+                    return (
+                      <th
+                        key={col}
+                        className={`py-2.5 px-4 whitespace-nowrap border-r border-slate-100 font-mono ${
+                          isSelected ? 'text-slate-900 bg-slate-50' : 'text-slate-400'
+                        }`}
+                      >
+                        <div className="flex items-center gap-1.5">
+                          <span>{col}</span>
+                          {isSelected && (
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" title="Columna seleccionada para exportar" />
+                          )}
+                        </div>
+                      </th>
+                    );
+                  })}
+                  <th className="py-2.5 px-3 text-right whitespace-nowrap sticky right-0 bg-slate-50 z-10 border-l border-slate-200 shadow-2xs">
+                    Hora
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {displayRecords.map((r, idx) => (
-                  <tr key={r.id} className="hover:bg-slate-50/70">
-                    <td className="py-2 px-3 text-center font-mono text-slate-400 tabular-nums">
+                  <tr key={r.id} className="hover:bg-slate-50/70 transition-colors">
+                    <td className="py-2 px-3 text-center font-mono text-slate-400 tabular-nums sticky left-0 bg-white hover:bg-slate-50 z-10 border-r border-slate-100 shadow-2xs">
                       {idx + 1}
                     </td>
-                    <td className="py-2 px-3 font-semibold text-slate-800 whitespace-nowrap">
+                    <td className="py-2 px-3 font-semibold text-slate-800 whitespace-nowrap sticky left-12 bg-white hover:bg-slate-50 z-10 border-r border-slate-100 shadow-2xs">
                       {r.sourceSheet}
                     </td>
-                    {visibleColumns.map(col => (
-                      <td key={col} className="py-2 px-3 text-slate-700 whitespace-nowrap">
-                        {r.data[col] !== undefined ? String(r.data[col]) : '-'}
+                    {allSyncedColumns.map(col => (
+                      <td
+                        key={col}
+                        className="py-2 px-4 text-slate-700 whitespace-nowrap border-r border-slate-100 font-mono"
+                      >
+                        {r.data[col] !== undefined && r.data[col] !== null && r.data[col] !== ''
+                          ? String(r.data[col])
+                          : <span className="text-slate-300">-</span>}
                       </td>
                     ))}
-                    <td className="py-2 px-3 text-right font-mono text-slate-400 tabular-nums whitespace-nowrap">
+                    <td className="py-2 px-3 text-right font-mono text-slate-400 tabular-nums whitespace-nowrap sticky right-0 bg-white hover:bg-slate-50 z-10 border-l border-slate-100 shadow-2xs">
                       {new Date(r.ingestedAt).toLocaleTimeString()}
                     </td>
                   </tr>
@@ -770,16 +1273,30 @@ export const MinimalSyncHub: React.FC<MinimalSyncHubProps> = ({
             </table>
           )}
         </div>
+
+        {/* Table Footer with Summary */}
+        {displayRecords.length > 0 && (
+          <div className="p-3 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-slate-500">
+            <span>
+              Mostrando {displayRecords.length} filas registradas · {allSyncedColumns.length} columnas en pantalla
+            </span>
+            <div className="flex items-center gap-3">
+              <span className="text-[11px] text-slate-400">
+                Usa el scroll horizontal para ver todas las columnas si exceden el ancho de tu pantalla
+              </span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Extension Card (Minimalist) */}
       <div className="bg-slate-50 border border-slate-200 rounded-xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-xs">
         <div className="flex items-center gap-3">
-          <div className="p-2 bg-white border border-slate-200 rounded-lg text-slate-800">
+          <div className="p-2 bg-white border border-slate-200 rounded-lg text-slate-800 shadow-2xs">
             <Chrome className="w-4 h-4" />
           </div>
           <div>
-            <div className="font-bold text-slate-900">Extensión de Google Chrome V3.0 (Extractor Directo)</div>
+            <div className="font-bold text-slate-900">Extensión de Google Chrome V3.2 (Extractor Directo)</div>
             <div className="text-slate-500">
               Extrae datos reales de cualquier pestaña de Google Sheets y páginas web sin depender del canvas.
             </div>
