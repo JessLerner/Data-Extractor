@@ -1,5 +1,5 @@
 import React from 'react';
-import { Download, Chrome, Radio, CheckCircle2, ShieldCheck, Database } from 'lucide-react';
+import { Download, Chrome, Radio, CheckCircle2, ShieldCheck, Database, Terminal, Code2 } from 'lucide-react';
 
 interface HeaderProps {
   isLiveConnected: boolean;
@@ -8,6 +8,7 @@ interface HeaderProps {
   isSupabaseConnected: boolean;
   onDownloadExtension: () => void;
   isDownloading?: boolean;
+  onOpenApiDocs?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -16,7 +17,8 @@ export const Header: React.FC<HeaderProps> = ({
   googleEmail,
   isSupabaseConnected,
   onDownloadExtension,
-  isDownloading = false
+  isDownloading = false,
+  onOpenApiDocs
 }) => {
   return (
     <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200">
@@ -73,6 +75,19 @@ export const Header: React.FC<HeaderProps> = ({
               <span>{isLiveConnected ? 'En vivo' : 'Conectando'}</span>
             </div>
           </div>
+
+          {/* API Docs Button */}
+          {onOpenApiDocs && (
+            <button
+              onClick={onOpenApiDocs}
+              className="px-3 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-800 text-xs font-semibold rounded-lg shadow-2xs flex items-center gap-1.5 transition-colors whitespace-nowrap"
+              title="Abrir consola y documentación de API REST"
+            >
+              <Terminal className="w-3.5 h-3.5 text-slate-600" />
+              <span className="hidden sm:inline">Consola API & Webhook</span>
+              <span className="sm:hidden">API</span>
+            </button>
+          )}
 
           {/* Primary Action: Download Chrome Extension */}
           <button

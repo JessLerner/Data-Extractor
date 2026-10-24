@@ -434,6 +434,120 @@ async function startServer() {
     res.json({ success: true, records: [] });
   });
 
+  // GET /api - API Directory & Specifications
+  app.get('/api', (_req: Request, res: Response) => {
+    res.json({
+      name: 'SheetStream REST API',
+      version: '3.2.0',
+      description: 'API REST para ingesta, extracción, selección de columnas y sincronización hacia Supabase y sistemas externos.',
+      status: 'online',
+      auth: {
+        type: 'Bearer Token or X-API-Key',
+        header: 'Authorization: Bearer <API_KEY>',
+        configured: Boolean(database.apiKey)
+      },
+      endpoints: [
+        {
+          method: 'POST',
+          path: '/api/ingest',
+          description: 'Ingesta de filas en tiempo real o en lote desde Google Sheets, CRM, Webhooks, Python o cURL.',
+          authRequired: true,
+          bodySchema: {
+            sheetName: 'string',
+            spreadsheetTitle: 'string',
+            spreadsheetId: 'string (opcional)',
+            action: "'batch_sync' | 'cell_edit'",
+            records: 'Array<Record<string, any>>'
+          }
+        },
+        {
+          method: 'GET',
+          path: '/api/records',
+          description: 'Consulta y búsqueda de registros almacenados en la base de datos.',
+          queryParams: {
+            sheet: "string ('all' o nombre de hoja)",
+            search: 'string (filtro de texto)'
+          }
+        },
+        {
+          method: 'POST',
+          path: '/api/export',
+          description: 'Exportación programática filtrando columnas específicas en formato JSON o CSV.',
+          bodySchema: {
+            columns: 'string[] (columnas a exportar)',
+            format: "'json' | 'csv'",
+            sheet: 'string (opcional)'
+          }
+        },
+        {
+          method: 'DELETE',
+          path: '/api/records',
+          description: 'Eliminación de registros por ID o vaciado completo de la base de datos.',
+          bodySchema: {
+            id: 'string (opcional)',
+            clearAll: 'boolean (opcional)'
+          }
+        },
+        {
+          method: 'GET',
+          path: '/api/stats',
+          description: 'Métricas agregadas (filas totales, suma monetaria, latencia, hojas activas).'
+        },
+        {
+          method: 'GET',
+          path: '/api/sync-logs',
+          description: 'Auditoría en tiempo real de las llamadas recibidas a la API.'
+        },
+        {
+          method: 'GET',
+          path: '/api/stream',
+          description: 'Stream Server-Sent Events (SSE) para escuchar eventos de sincronización en vivo.'
+        }
+      ]
+    });
+  });
+
+  // POST /api/export - Export records with column filtering via API
+  app.post('/api/export', (req: Request, res: Response) => {
+    const { columns = [], format = 'json', sheet = 'all' } = req.body || {};
+    let list = database.records;
+    if (sheet && sheet !== 'all') {
+      list = list.filter(r => r.sourceSheet === sheet);
+    }
+
+    const filtered = list.map(r => {
+      if (!Array.isArray(columns) || columns.length === 0) return r.data;
+      const row: Record<string, any> = {};
+      columns.forEach((col: string) => {
+        if (r.data[col] !== undefined) row[col] = r.data[col];
+      });
+      return row;
+    });
+
+    if (format === 'csv') {
+      const keys = Array.isArray(columns) && columns.length > 0
+        ? columns
+        : Array.from(new Set(filtered.flatMap(Object.keys)));
+
+      const csvRows = [
+        keys.join(','),
+        ...filtered.map((row: any) =>
+          keys.map((k: string) => `"${String(row[k] ?? '').replace(/"/g, '""')}"`).join(',')
+        )
+      ];
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', 'attachment; filename="sheetstream_export.csv"');
+      return res.send(csvRows.join('\n'));
+    }
+
+    return res.json({
+      success: true,
+      total: filtered.length,
+      columns: Array.isArray(columns) && columns.length > 0 ? columns : 'all',
+      records: filtered
+    });
+  });
+
   // Vite Integration
   const isDev = process.env.NODE_ENV !== 'production';
   if (isDev) {

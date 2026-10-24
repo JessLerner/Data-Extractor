@@ -20,7 +20,8 @@ import {
   ChevronLeft,
   ChevronRight,
   Sparkles,
-  Info
+  Info,
+  Terminal
 } from 'lucide-react';
 import {
   initAuth,
@@ -50,6 +51,7 @@ interface MinimalSyncHubProps {
   isDownloading: boolean;
   onGoogleStatusChange?: (connected: boolean, email?: string | null) => void;
   onSupabaseStatusChange?: (connected: boolean) => void;
+  onOpenApiDocs?: () => void;
 }
 
 export const MinimalSyncHub: React.FC<MinimalSyncHubProps> = ({
@@ -57,7 +59,8 @@ export const MinimalSyncHub: React.FC<MinimalSyncHubProps> = ({
   onDownloadExtension,
   isDownloading,
   onGoogleStatusChange,
-  onSupabaseStatusChange
+  onSupabaseStatusChange,
+  onOpenApiDocs
 }) => {
   // Source Selection: 'sheets' | 'file' | 'web'
   const [sourceType, setSourceType] = useState<'sheets' | 'file' | 'web'>('sheets');
@@ -1289,28 +1292,65 @@ export const MinimalSyncHub: React.FC<MinimalSyncHubProps> = ({
         )}
       </div>
 
-      {/* Extension Card (Minimalist) */}
-      <div className="bg-slate-50 border border-slate-200 rounded-xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-xs">
-        <div className="flex items-center gap-3">
-          <div className="p-2 bg-white border border-slate-200 rounded-lg text-slate-800 shadow-2xs">
-            <Chrome className="w-4 h-4" />
-          </div>
-          <div>
-            <div className="font-bold text-slate-900">Extensión de Google Chrome V3.2 (Extractor Directo)</div>
-            <div className="text-slate-500">
-              Extrae datos reales de cualquier pestaña de Google Sheets y páginas web sin depender del canvas.
+      {/* Integration Options Grid: API & Chrome Extension */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Card 1: API REST & Webhook */}
+        <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between gap-3 text-xs shadow-xs">
+          <div className="flex items-start gap-3">
+            <div className="p-2 bg-slate-900 text-white rounded-lg shadow-2xs shrink-0 mt-0.5">
+              <Terminal className="w-4 h-4" />
             </div>
+            <div>
+              <div className="font-bold text-slate-900 flex items-center gap-1.5">
+                <span>API REST & Webhooks Externos</span>
+                <span className="text-[10px] bg-emerald-50 text-emerald-700 border border-emerald-200 px-1.5 py-0.2 rounded font-mono font-semibold">
+                  Activa
+                </span>
+              </div>
+              <div className="text-slate-500 mt-1">
+                Conecta esta aplicación como una API autónoma desde cURL, Python, Node.js, Zapier, Make o Google Apps Script.
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+            <span className="text-[11px] font-mono text-slate-400">Endpoint: /api/ingest</span>
+            <button
+              onClick={onOpenApiDocs}
+              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold rounded-lg transition-colors flex items-center gap-1"
+            >
+              <span>Ver Documentación & cURL</span>
+              <ChevronRight className="w-3.5 h-3.5" />
+            </button>
           </div>
         </div>
 
-        <button
-          onClick={onDownloadExtension}
-          disabled={isDownloading}
-          className="px-4 py-2 bg-slate-900 text-white font-semibold rounded-lg hover:bg-slate-800 transition-colors shadow-2xs whitespace-nowrap disabled:opacity-50 flex items-center gap-1.5 shrink-0"
-        >
-          <Download className="w-3.5 h-3.5" />
-          <span>{isDownloading ? 'Generando...' : 'Descargar Extensión (.ZIP)'}</span>
-        </button>
+        {/* Card 2: Extension Card (Minimalist) */}
+        <div className="bg-slate-50 border border-slate-200 rounded-xl p-5 flex flex-col justify-between gap-3 text-xs">
+          <div className="flex items-start gap-3">
+            <div className="p-2 bg-white border border-slate-200 rounded-lg text-slate-800 shadow-2xs shrink-0 mt-0.5">
+              <Chrome className="w-4 h-4" />
+            </div>
+            <div>
+              <div className="font-bold text-slate-900">Extensión Google Chrome V3.2</div>
+              <div className="text-slate-500 mt-1">
+                Extrae datos de cualquier pestaña de Google Sheets y páginas web sin depender del canvas.
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between pt-2 border-t border-slate-200/60">
+            <span className="text-[11px] text-slate-400">Instalable sin tienda oficial</span>
+            <button
+              onClick={onDownloadExtension}
+              disabled={isDownloading}
+              className="px-3 py-1.5 bg-slate-900 text-white font-semibold rounded-lg hover:bg-slate-800 transition-colors shadow-2xs whitespace-nowrap disabled:opacity-50 flex items-center gap-1.5"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>{isDownloading ? 'Generando...' : 'Descargar ZIP'}</span>
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* SQL Modal */}

@@ -6,9 +6,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Header } from './components/Header';
 import { MinimalSyncHub } from './components/MinimalSyncHub';
+import { ApiWebhookConfig } from './components/ApiWebhookConfig';
 import { apiClient, realtimeStream } from './services/api';
 import { downloadExtensionZip } from './services/extensionBundle';
 import { loadSupabaseConfig, sendRowsToSupabase } from './services/supabaseClient';
+import { X } from 'lucide-react';
 
 export default function App() {
   const [isLiveConnected, setIsLiveConnected] = useState<boolean>(false);
@@ -18,6 +20,7 @@ export default function App() {
   const [isDownloading, setIsDownloading] = useState<boolean>(false);
   const [apiKey, setApiKey] = useState<string>('sk_live_sheetstream_prod_99f2');
   const [notification, setNotification] = useState<{ title: string; subtitle: string } | null>(null);
+  const [showApiModal, setShowApiModal] = useState<boolean>(false);
 
   // Dynamic API Base URL
   const apiBaseUrl = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
@@ -93,7 +96,40 @@ export default function App() {
         isSupabaseConnected={isSupabaseConnected}
         onDownloadExtension={handleDownloadExtension}
         isDownloading={isDownloading}
+        onOpenApiDocs={() => setShowApiModal(true)}
       />
+
+      {/* Interactive API Console & Documentation Modal */}
+      {showApiModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-4xl w-full my-8 p-6 relative max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-4 border-b border-slate-200 mb-6">
+              <div>
+                <h2 className="text-base font-bold text-slate-900">
+                  Consola de API REST & Webhook en Vivo
+                </h2>
+                <p className="text-xs text-slate-500">
+                  Integra esta aplicación como una API autónoma desde Python, cURL, Node.js, Zapier, Make o Google Apps Script.
+                </p>
+              </div>
+              <button
+                onClick={() => setShowApiModal(false)}
+                className="p-2 text-slate-400 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors"
+                title="Cerrar modal"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <ApiWebhookConfig
+              apiBaseUrl={apiBaseUrl}
+              apiKey={apiKey}
+              onApiKeyUpdated={(newKey) => setApiKey(newKey)}
+              onTestSuccess={() => {}}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Floating Real-Time Toast Notification */}
       {notification && (
@@ -112,6 +148,7 @@ export default function App() {
           apiKey={apiKey}
           onDownloadExtension={handleDownloadExtension}
           isDownloading={isDownloading}
+          onOpenApiDocs={() => setShowApiModal(true)}
           onGoogleStatusChange={(connected, email) => {
             setIsGoogleConnected(connected);
             setGoogleEmail(email || null);
